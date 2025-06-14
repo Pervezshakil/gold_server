@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 
 # 🟡 Gold Rate + Market Sentiment Server (Capital.com API)
 
@@ -28,3 +29,7 @@ This Node.js server streams live gold rate and market sentiment data from [Capit
 
 ## 📁 Project Structure
 
+=======
+# gold_server
+Gold API server
+>>>>>>> 914680a0a73864cd6052e99cdc3badc963e531d5
