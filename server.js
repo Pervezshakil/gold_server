@@ -1,14 +1,14 @@
-// ✅ server.js - Streaming Ready (Client connect = instant + live data)
+// server.js — Auto streaming EPIC (no sentiment), detailed log
 const axios = require('axios');
 const WebSocket = require('ws');
 const express = require('express');
 const cors = require('cors');
 
-// --------- 🔑 Capital.com Credentials ---------
+// --- Capital.com credentials ---
 const CAPITAL_API_KEY = 'HdwRdqYQfPnfhvzh';
 const CAPITAL_EMAIL = 'sohagpervez516@gmail.com';
 const CAPITAL_PASSWORD = 'Nbh.9d9qm9a9@3g';
-//------------------------------------------------
+// -------------------------------
 
 let cst = '';
 let securityToken = '';
@@ -16,18 +16,10 @@ let goldEpic = '';
 let sessionHigh = null;
 let sessionLow = null;
 let clients = [];
-
-let lastRate = null;      // ⭐ Latest rate cache
-let lastSentiment = null; // ⭐ Latest sentiment cache
+let lastRate = null; // Cache last broadcast rate
 
 const app = express();
 app.use(cors());
-
-app.get('/api/sentiment', async (req, res) => {
-    const sentiment = await getMarketSentiment();
-    if (sentiment) res.json(sentiment);
-    else res.status(500).json({ error: 'Sentiment data not available' });
-});
 
 app.get('/', (req, res) => res.send('✅ Gold Server Running'));
 
@@ -40,24 +32,16 @@ const wss = new WebSocket.Server({ server });
 wss.on('connection', (ws) => {
     clients.push(ws);
 
-    // ⭐ Client connect হলে সাথে সাথে ইনস্ট্যান্ট মেসেজ পাঠাও
     ws.send(JSON.stringify({
         type: 'connected',
         message: '✅ Connected to Gold WebSocket Server',
         time: new Date().toISOString()
     }));
 
-    // ⭐ Last cached rate থাকলে সাথে সাথেই পাঠাও
     if (lastRate) {
         ws.send(JSON.stringify({ type: 'rate', ...lastRate }));
     }
 
-    // ⭐ Last cached sentiment থাকলে সেটাও পাঠাও
-    if (lastSentiment) {
-        ws.send(JSON.stringify({ type: 'sentiment', ...lastSentiment }));
-    }
-
-    // Optional: sessionHigh/sessionLow পাঠাতে চাইলে
     if (sessionHigh !== null && sessionLow !== null) {
         ws.send(JSON.stringify({
             type: 'sessionStats',
@@ -67,60 +51,31 @@ wss.on('connection', (ws) => {
         }));
     }
 
-    ws.on('close', () => clients = clients.filter(c => c !== ws));
-    ws.on('error', () => clients = clients.filter(c => c !== ws));
+    ws.on('close', () => {
+        clients = clients.filter(c => c !== ws);
+        console.log(`[CLIENT] WebSocket client disconnected. Total: ${clients.length}`);
+    });
+    ws.on('error', (err) => {
+        clients = clients.filter(c => c !== ws);
+        console.error(`[CLIENT] WebSocket client error: ${err.message}`);
+    });
 });
 
-// সবকিছু broadcast করার ফাংশন
 function broadcastToClients(data) {
     const json = typeof data === 'string' ? data : JSON.stringify(data);
     clients = clients.filter(ws => ws.readyState === ws.OPEN);
     clients.forEach(ws => ws.send(json));
 }
 
-// Session High/Low update utility
 function updateSessionHighLow(bid, ask) {
     if (sessionHigh === null || ask > sessionHigh) sessionHigh = ask;
     if (sessionLow === null || bid < sessionLow) sessionLow = bid;
 }
 
-// Market Sentiment
-async function broadcastSentimentToClients() {
-    const sentiment = await getMarketSentiment();
-    if (!sentiment) return;
-    lastSentiment = sentiment; // ⭐ cache latest sentiment
-    broadcastToClients({ type: 'sentiment', ...sentiment });
-}
-
-async function getMarketSentiment(epic = goldEpic) {
-    if (!epic || !cst || !securityToken) return null;
-    try {
-        const response = await axios.get(
-            `https://api-capital.backend-capital.com/api/v1/client-sentiment/${epic}`,
-            {
-                headers: {
-                    'CST': cst,
-                    'X-SECURITY-TOKEN': securityToken,
-                    'X-CAP-API-KEY': CAPITAL_API_KEY,
-                    'Accept': 'application/json'
-                }
-            }
-        );
-        const data = response.data;
-        return {
-            buyers: data.longPositionPercentage,
-            sellers: data.shortPositionPercentage,
-            updated: data.lastUpdated || data.timestamp || new Date().toISOString()
-        };
-    } catch (e) {
-        console.error('❌ Sentiment fetch error:', e.response?.data || e.message);
-        return null;
-    }
-}
-
-// Capital.com session
+// === Main Capital.com Session & Streaming Logic ===
 async function createSession() {
     try {
+        console.log('[SESSION] Creating Capital.com session...');
         const sessionRes = await axios.post(
             'https://api-capital.backend-capital.com/api/v1/session',
             {
@@ -137,19 +92,22 @@ async function createSession() {
         );
         cst = sessionRes.headers['cst'];
         securityToken = sessionRes.headers['x-security-token'];
-        console.log(`🔑 Session Success: CST=${cst}`);
+        console.log(`[SESSION] Success: CST=${cst}`);
 
-        goldEpic = await fetchGoldEpic(cst, securityToken);
-        if (!goldEpic) throw new Error("No gold epic found!");
-        console.log('💰 GOLD EPIC:', goldEpic);
+        goldEpic = await fetchStreamingEpic(cst, securityToken);
+        if (!goldEpic) {
+            console.error('[EPIC] No streaming EPIC found! Exiting.');
+            process.exit(1);
+        }
+        console.log('[EPIC] Streaming GOLD EPIC:', goldEpic);
     } catch (e) {
-        console.error('❌ Session error:', e.response ? e.response.data : e.message);
-        throw e;
+        console.error('[SESSION ERROR]', e.response ? e.response.data : e.message);
+        process.exit(1);
     }
 }
 
-// Market epic fetch
-async function fetchGoldEpic(cst, securityToken) {
+// === Find only streaming enabled epic ===
+async function fetchStreamingEpic(cst, securityToken) {
     const terms = ['gold', 'xauusd', 'spot gold'];
     for (const term of terms) {
         try {
@@ -163,21 +121,31 @@ async function fetchGoldEpic(cst, securityToken) {
                 }
             );
             if (res.data.markets && res.data.markets.length > 0) {
-                const market = res.data.markets.find(m => m.epic && m.epic.startsWith('CS.D.GC.'));
-                if (market) return market.epic;
+                // Only take streaming-enabled epic
+                const market = res.data.markets.find(
+                    m => m.epic && m.streamingPricesAvailable === true
+                );
+                if (market) {
+                    console.log(`[EPIC] Found streaming epic for "${term}": ${market.epic} | Name: ${market.marketName}`);
+                    return market.epic;
+                }
             }
-        } catch (e) {}
+        } catch (e) {
+            console.error(`[EPIC] Error fetching for "${term}":`, e.response?.data || e.message);
+        }
     }
-    return 'CS.D.GC.MONTH1'; // fallback to known valid GOLD EPIC
+    return null;
 }
 
-// ⭐ Capital.com streaming WebSocket
 function connectCapitalWebSocket() {
-    if (!cst || !securityToken || !goldEpic) return;
+    if (!cst || !securityToken || !goldEpic) {
+        console.error('[WS] Missing session/cst/token/epic, cannot connect to streaming API!');
+        return;
+    }
     const ws = new WebSocket('wss://api-streaming-capital.backend-capital.com/connect');
 
     ws.on('open', () => {
-        console.log('🟢 Connected to Capital.com streaming');
+        console.log('[WS] 🟢 Connected to Capital.com streaming');
         ws.send(JSON.stringify({
             destination: 'marketData.subscribe',
             correlationId: '1',
@@ -185,12 +153,20 @@ function connectCapitalWebSocket() {
             securityToken,
             payload: { epics: [goldEpic] }
         }));
+        console.log(`[WS] Sent subscribe for epic: ${goldEpic}`);
     });
 
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
-            if (data.destination === 'quote' && data.payload && data.payload.epic === goldEpic) {
+            // Show all incoming messages
+            console.log('[WS][RAW]', data);
+
+            if (
+                data.destination === 'quote' &&
+                data.payload &&
+                data.payload.epic === goldEpic
+            ) {
                 const payload = data.payload;
                 const bid = payload.bid || 0;
                 const spread = 1.0;
@@ -198,41 +174,47 @@ function connectCapitalWebSocket() {
                 updateSessionHighLow(bid, ask);
                 const high = payload.high || sessionHigh || ask;
                 const low = payload.low || sessionLow || bid;
-                lastRate = { // ⭐ cache latest rate
+                lastRate = {
                     bid, ask, high, low, unit: 'ounce', updated: new Date().toISOString()
                 };
                 const result = {
                     type: 'rate',
                     ...lastRate
                 };
-                console.log('💸 Rate:', result);
+                console.log('💸 [WS] Rate:', result);
                 broadcastToClients(result);
+            } else if (data.destination === 'marketData.subscribe') {
+                const sub = data.payload?.subscriptions?.[goldEpic];
+                if (typeof sub === 'string' && sub.startsWith('ERROR')) {
+                    console.error(`[WS][SUBSCRIPTION ERROR] ${sub}`);
+                }
             }
         } catch (e) {
-            console.error('Parse error:', e);
+            console.error('[WS][MESSAGE][PARSE ERROR]', e);
         }
     });
 
     ws.on('error', err => {
-        console.error('❌ Capital streaming error:', err.message);
+        console.error('[WS][ERROR] Capital streaming error:', err.message, err);
         ws.close();
     });
 
-    ws.on('close', () => {
-        console.log('🛑 Streaming closed. Reconnecting...');
+    ws.on('close', (code, reason) => {
+        console.warn(`[WS][CLOSE] Streaming closed. Code: ${code}, Reason: ${reason}`);
         setTimeout(connectCapitalWebSocket, 1500);
     });
 }
 
-// Error handling
-process.on('uncaughtException', err => console.error('Uncaught Exception:', err));
-process.on('unhandledRejection', reason => console.error('Unhandled Rejection:', reason));
+// Node.js error handling
+process.on('uncaughtException', err => console.error('[NODE][UNCAUGHT EXCEPTION]', err));
+process.on('unhandledRejection', reason => console.error('[NODE][UNHANDLED REJECTION]', reason));
 
-// ⭐ Server bootstrap
+// Main bootstrap
 (async () => {
     await createSession();
     connectCapitalWebSocket();
-    setInterval(async () => await createSession(), 8 * 60 * 1000);
-    setInterval(() => broadcastSentimentToClients(), 1 * 60 * 1000);
-    broadcastSentimentToClients();
+    setInterval(async () => {
+        console.log('[SESSION] Refreshing Capital.com session...');
+        await createSession();
+    }, 8 * 60 * 1000);
 })();
