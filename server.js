@@ -1,5 +1,4 @@
-// ✅ server.js - Final Version with Valid EPIC for Sentiment
-
+// ✅ server.js - Streaming Ready (Client connect = instant + live data)
 const axios = require('axios');
 const WebSocket = require('ws');
 const express = require('express');
@@ -18,6 +17,9 @@ let sessionHigh = null;
 let sessionLow = null;
 let clients = [];
 
+let lastRate = null;      // ⭐ Latest rate cache
+let lastSentiment = null; // ⭐ Latest sentiment cache
+
 const app = express();
 app.use(cors());
 
@@ -28,32 +30,65 @@ app.get('/api/sentiment', async (req, res) => {
 });
 
 app.get('/', (req, res) => res.send('✅ Gold Server Running'));
- 
+
 const server = app.listen(process.env.PORT || 3000, () => {
     console.log(`🌐 HTTP+WebSocket server running on port ${process.env.PORT || 3000}`);
 });
 
 const wss = new WebSocket.Server({ server });
+
 wss.on('connection', (ws) => {
     clients.push(ws);
+
+    // ⭐ Client connect হলে সাথে সাথে ইনস্ট্যান্ট মেসেজ পাঠাও
+    ws.send(JSON.stringify({
+        type: 'connected',
+        message: '✅ Connected to Gold WebSocket Server',
+        time: new Date().toISOString()
+    }));
+
+    // ⭐ Last cached rate থাকলে সাথে সাথেই পাঠাও
+    if (lastRate) {
+        ws.send(JSON.stringify({ type: 'rate', ...lastRate }));
+    }
+
+    // ⭐ Last cached sentiment থাকলে সেটাও পাঠাও
+    if (lastSentiment) {
+        ws.send(JSON.stringify({ type: 'sentiment', ...lastSentiment }));
+    }
+
+    // Optional: sessionHigh/sessionLow পাঠাতে চাইলে
+    if (sessionHigh !== null && sessionLow !== null) {
+        ws.send(JSON.stringify({
+            type: 'sessionStats',
+            high: sessionHigh,
+            low: sessionLow,
+            time: new Date().toISOString()
+        }));
+    }
+
     ws.on('close', () => clients = clients.filter(c => c !== ws));
     ws.on('error', () => clients = clients.filter(c => c !== ws));
 });
 
+// সবকিছু broadcast করার ফাংশন
 function broadcastToClients(data) {
     const json = typeof data === 'string' ? data : JSON.stringify(data);
     clients = clients.filter(ws => ws.readyState === ws.OPEN);
     clients.forEach(ws => ws.send(json));
 }
 
+// Session High/Low update utility
 function updateSessionHighLow(bid, ask) {
     if (sessionHigh === null || ask > sessionHigh) sessionHigh = ask;
     if (sessionLow === null || bid < sessionLow) sessionLow = bid;
 }
 
+// Market Sentiment
 async function broadcastSentimentToClients() {
     const sentiment = await getMarketSentiment();
     if (!sentiment) return;
+    lastSentiment = sentiment; // ⭐ cache latest sentiment
     broadcastToClients({ type: 'sentiment', ...sentiment });
 }
 
@@ -83,6 +118,7 @@ async function getMarketSentiment(epic = goldEpic) {
     }
 }
 
+// Capital.com session
 async function createSession() {
     try {
         const sessionRes = await axios.post(
@@ -112,6 +148,7 @@ async function createSession() {
     }
 }
 
+// Market epic fetch
 async function fetchGoldEpic(cst, securityToken) {
     const terms = ['gold', 'xauusd', 'spot gold'];
     for (const term of terms) {
@@ -134,6 +171,7 @@ async function fetchGoldEpic(cst, securityToken) {
     return 'CS.D.GC.MONTH1'; // fallback to known valid GOLD EPIC
 }
 
+// ⭐ Capital.com streaming WebSocket
 function connectCapitalWebSocket() {
     if (!cst || !securityToken || !goldEpic) return;
     const ws = new WebSocket('wss://api-streaming-capital.backend-capital.com/connect');
@@ -160,8 +198,12 @@ function connectCapitalWebSocket() {
                 updateSessionHighLow(bid, ask);
                 const high = payload.high || sessionHigh || ask;
                 const low = payload.low || sessionLow || bid;
+                lastRate = { // ⭐ cache latest rate
+                    bid, ask, high, low, unit: 'ounce', updated: new Date().toISOString()
+                };
                 const result = {
-                    type: 'rate', bid, ask, high, low, unit: 'ounce', updated: new Date().toISOString()
+                    type: 'rate',
+                    ...lastRate
                 };
                 console.log('💸 Rate:', result);
                 broadcastToClients(result);
@@ -182,13 +224,15 @@ function connectCapitalWebSocket() {
     });
 }
 
+// Error handling
 process.on('uncaughtException', err => console.error('Uncaught Exception:', err));
 process.on('unhandledRejection', reason => console.error('Unhandled Rejection:', reason));
 
+// ⭐ Server bootstrap
 (async () => {
     await createSession();
     connectCapitalWebSocket();
     setInterval(async () => await createSession(), 8 * 60 * 1000);
-    setInterval(() => broadcastSentimentToClients(), 15 * 60 * 1000);
+    setInterval(() => broadcastSentimentToClients(), 1 * 60 * 1000);
     broadcastSentimentToClients();
 })();
