@@ -66,6 +66,11 @@ function broadcastToClients(data) {
     clients = clients.filter(ws => ws.readyState === ws.OPEN);
     clients.forEach(ws => ws.send(json));
 }
+setInterval(() => {
+    if (lastRate) {
+        broadcastToClients({ type: 'rate', ...lastRate });
+    }
+}, 1000);
 
 function updateSessionHighLow(bid, ask) {
     if (sessionHigh === null || ask > sessionHigh) sessionHigh = ask;
@@ -168,7 +173,9 @@ function connectCapitalWebSocket() {
                 data.payload.epic === goldEpic
             ) {
                 const payload = data.payload;
-                const bid = payload.bid || 0;
+                   const bid = (typeof payload.bid === 'number' && payload.bid > 0)
+                    ? payload.bid
+                    : (lastRate ? lastRate.bid : 0);
                 const spread = 1.0;
                 const ask = parseFloat((bid + spread).toFixed(2));
                 updateSessionHighLow(bid, ask);
@@ -216,5 +223,5 @@ process.on('unhandledRejection', reason => console.error('[NODE][UNHANDLED REJEC
     setInterval(async () => {
         console.log('[SESSION] Refreshing Capital.com session...');
         await createSession();
-    }, 8 * 60 * 1000);
+    }, 9 * 60 * 1000);
 })();
