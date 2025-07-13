@@ -1,8 +1,8 @@
-// server.js — Auto streaming EPIC (no sentiment), detailed log
 const axios = require('axios');
 const WebSocket = require('ws');
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs'); // ⬅️ Add this
 
 // --- Capital.com credentials ---
 const CAPITAL_API_KEY = 'HdwRdqYQfPnfhvzh';
@@ -17,6 +17,33 @@ let sessionHigh = null;
 let sessionLow = null;
 let clients = [];
 let lastRate = null; // Cache last broadcast rate
+
+const LAST_RATE_FILE = './lastrate.json'; // ⬅️ Add this
+
+// ---- [1] Load last rate from file on server start ----
+function loadLastRate() {
+    if (fs.existsSync(LAST_RATE_FILE)) {
+        try {
+            lastRate = JSON.parse(fs.readFileSync(LAST_RATE_FILE, 'utf-8'));
+            console.log('[SERVER] LastRate loaded from file:', lastRate);
+        } catch (e) {
+            console.error('[SERVER] lastrate.json read error:', e.message);
+            lastRate = null;
+        }
+    }
+}
+
+// ---- [2] Save last rate to file whenever new rate comes ----
+function saveLastRate(rate) {
+    lastRate = rate;
+    try {
+        fs.writeFileSync(LAST_RATE_FILE, JSON.stringify(rate));
+    } catch (e) {
+        console.error('[SERVER] lastrate.json write error:', e.message);
+    }
+}
+
+loadLastRate(); // ⬅️ Startup-এ call
 
 const app = express();
 app.use(cors());
@@ -38,6 +65,7 @@ wss.on('connection', (ws) => {
         time: new Date().toISOString()
     }));
 
+    // Always send lastRate (from file or stream)
     if (lastRate) {
         ws.send(JSON.stringify({ type: 'rate', ...lastRate }));
     }
@@ -66,6 +94,8 @@ function broadcastToClients(data) {
     clients = clients.filter(ws => ws.readyState === ws.OPEN);
     clients.forEach(ws => ws.send(json));
 }
+
+// [3] Always broadcast lastRate every 1s (from file or stream)
 setInterval(() => {
     if (lastRate) {
         broadcastToClients({ type: 'rate', ...lastRate });
@@ -142,6 +172,7 @@ async function fetchStreamingEpic(cst, securityToken) {
     return null;
 }
 
+// === [4] STREAMING — ALWAYS save new rate to file ===
 function connectCapitalWebSocket() {
     if (!cst || !securityToken || !goldEpic) {
         console.error('[WS] Missing session/cst/token/epic, cannot connect to streaming API!');
@@ -165,7 +196,7 @@ function connectCapitalWebSocket() {
         try {
             const data = JSON.parse(message);
             // Show all incoming messages
-            console.log('[WS][RAW]', data);
+            // console.log('[WS][RAW]', data);
 
             if (
                 data.destination === 'quote' &&
@@ -173,7 +204,7 @@ function connectCapitalWebSocket() {
                 data.payload.epic === goldEpic
             ) {
                 const payload = data.payload;
-                   const bid = (typeof payload.bid === 'number' && payload.bid > 0)
+                const bid = (typeof payload.bid === 'number' && payload.bid > 0)
                     ? payload.bid
                     : (lastRate ? lastRate.bid : 0);
                 const spread = 1.0;
@@ -181,14 +212,14 @@ function connectCapitalWebSocket() {
                 updateSessionHighLow(bid, ask);
                 const high = payload.high || sessionHigh || ask;
                 const low = payload.low || sessionLow || bid;
-                lastRate = {
+
+                // [SAVE to file & update broadcast]
+                const newRate = {
                     bid, ask, high, low, unit: 'ounce', updated: new Date().toISOString()
                 };
-                const result = {
-                    type: 'rate',
-                    ...lastRate
-                };
-                console.log('💸 [WS] Rate:', result);
+                saveLastRate(newRate); // <-- এইখানে ফাইলে সেভ হয়
+                const result = { type: 'rate', ...newRate };
+                // console.log('💸 [WS] Rate:', result);
                 broadcastToClients(result);
             } else if (data.destination === 'marketData.subscribe') {
                 const sub = data.payload?.subscriptions?.[goldEpic];
