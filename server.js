@@ -66,8 +66,17 @@ wss.on('connection', (ws) => {
     }));
 
     // Always send lastRate (from file or stream)
-    if (lastRate) {
+    /*if (lastRate) {
         ws.send(JSON.stringify({ type: 'rate', ...lastRate }));
+    }*/
+
+        // Always send lastRate (from file or stream) — format before sending
+    if (lastRate) {
+        try {
+            ws.send(JSON.stringify(formatRateForBroadcast({ type: 'rate', ...lastRate })));
+        } catch (e) {
+            console.error('[CONNECTION][SEND LASTRATE ERROR]', e && e.message);
+        }
     }
 
     if (sessionHigh !== null && sessionLow !== null) {
@@ -89,11 +98,50 @@ wss.on('connection', (ws) => {
     });
 });
 
-function broadcastToClients(data) {
+/*function broadcastToClients(data) {
     const json = typeof data === 'string' ? data : JSON.stringify(data);
     clients = clients.filter(ws => ws.readyState === ws.OPEN);
     clients.forEach(ws => ws.send(json));
+}*/
+
+// ----------------- Replace your existing broadcastToClients with this -----------------
+function formatRateForBroadcast(obj) {
+    const pick = (v) => {
+        if (v === undefined || v === null) return null;
+        const n = Number(v);
+        if (isNaN(n)) return String(v);
+        return n.toFixed(2); // ALWAYS returns string with 2 decimals (e.g. "2350.00")
+    };
+
+    // copy fields but format numeric rate fields to 2 decimals as strings
+    return {
+        ...obj,
+        bid: obj.bid !== undefined ? pick(obj.bid) : obj.bid,
+        ask: obj.ask !== undefined ? pick(obj.ask) : obj.ask,
+        high: obj.high !== undefined ? pick(obj.high) : obj.high,
+        low: obj.low !== undefined ? pick(obj.low) : obj.low,
+    };
 }
+
+function broadcastToClients(data) {
+    let out = data;
+    try {
+        const isRateLike = data && (data.type === 'rate' || data.bid !== undefined || data.ask !== undefined);
+        if (isRateLike && typeof data === 'object' && !Array.isArray(data)) {
+            out = formatRateForBroadcast(data);
+        }
+    } catch (e) {
+        console.error('[BROADCAST][FORMAT ERROR]', e && e.message);
+        out = data; // fallback to original if formatting fails
+    }
+
+    const json = typeof out === 'string' ? out : JSON.stringify(out);
+    clients = clients.filter(ws => ws.readyState === ws.OPEN);
+    clients.forEach(ws => {
+        try { ws.send(json); } catch (err) { /* ignore per-client send errors */ }
+    });
+}
+// --------------------------------------------------------------------------------------
 
 // [3] Always broadcast lastRate every 1s (from file or stream)
 setInterval(() => {
