@@ -5,9 +5,9 @@ const cors = require('cors');
 const fs = require('fs'); // ⬅️ Add this
 
 // --- Capital.com credentials ---
-const CAPITAL_API_KEY = 'HdwRdqYQfPnfhvzh';
+const CAPITAL_API_KEY = '3sIVUBuiYwgu3COL';
 const CAPITAL_EMAIL = 'sohagpervez516@gmail.com';
-const CAPITAL_PASSWORD = 'Nbh.9d9qm9a9@3g';
+const CAPITAL_PASSWORD = 'Nbh.9d9qm9a9@4g';
 // -------------------------------
 
 let cst = '';
