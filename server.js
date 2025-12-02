@@ -21,10 +21,8 @@ app.get('/', (req, res) => {
 const server = http.createServer(app);
 
 // ---- WebSocket with path /ws (Render NEEDS PATH) ----
-const wss = new WebSocket.Server({
-  server,
-  path: "/ws",
-});
+const wss = new WebSocket.Server({ server });
+
 
 // ---- Heartbeats ----
 function heartbeat() {
