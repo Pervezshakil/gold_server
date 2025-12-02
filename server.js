@@ -158,7 +158,7 @@ wss.on('connection', (ws) => {
       // 👉 VPS / Python bridge থেকে আসবে: { type: 'tick', symbol, bid, ask, time, ... }
       if (data && data.type === 'tick') {
         const bid = Number(data.bid);
-        const ask = Number(data.ask);
+        const ask = Number(data.ask) + 0.40;
 
         if (!isNaN(bid) && !isNaN(ask)) {
           updateSessionHighLow(bid, ask);
