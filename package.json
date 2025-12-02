@@ -1,5 +1,17 @@
-"dependencies": {
-  "cors": "^2.8.5",
-  "express": "^5.1.0",
-  "ws": "^8.18.2"
+{
+  "name": "gold_server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "ws": "^8.18.2"
+  }
 }
