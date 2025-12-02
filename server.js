@@ -1,25 +1,33 @@
-// server.js
+// server.js (Render side: gold-server-eklw)
 const WebSocket = require('ws');
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 
-// =========================
-// MT5 VPS WebSocket config
-// =========================
-const MT5_WS_URL = process.env.MT5_WS_URL || 'ws://62.72.43.224:10000';
+const app = express();
+app.use(cors());
 
-// =========================
-// State variables
-// =========================
+app.get('/', (req, res) => {
+  res.send('✅ Gold Server Running (MT5 via VPS → Render)');
+});
+
+// Render এখানে নিজে PORT দেয় (env.PORT), না থাকলে 3000
+const HTTP_PORT = process.env.PORT || 3000;
+
+const server = app.listen(HTTP_PORT, () => {
+  console.log(`🌐 HTTP+WebSocket server running on port ${HTTP_PORT}`);
+});
+
+const wss = new WebSocket.Server({ server });
+
+// ====== state ======
+let clients = [];
 let sessionHigh = null;
 let sessionLow = null;
-let clients = [];
-let lastRate = null; // Cache last broadcast rate
-
+let lastRate = null;
 const LAST_RATE_FILE = './lastrate.json';
 
-// ---- [1] Load last rate from file on server start ----
+// ====== load/save lastRate ======
 function loadLastRate() {
   if (fs.existsSync(LAST_RATE_FILE)) {
     try {
@@ -32,7 +40,6 @@ function loadLastRate() {
   }
 }
 
-// ---- [2] Save last rate to file whenever new rate comes ----
 function saveLastRate(rate) {
   lastRate = rate;
   try {
@@ -44,79 +51,18 @@ function saveLastRate(rate) {
 
 loadLastRate();
 
-// =========================
-// Express + WebSocket server
-// =========================
-const app = express();
-app.use(cors());
+function updateSessionHighLow(bid, ask) {
+  if (sessionHigh === null || ask > sessionHigh) sessionHigh = ask;
+  if (sessionLow === null || bid < sessionLow) sessionLow = bid;
+}
 
-app.get('/', (req, res) => res.send('✅ Gold Server Running (MT5 VPS)'));
-
-const server = app.listen(process.env.PORT || 3000, () => {
-  console.log(
-    `🌐 HTTP+WebSocket server running on port ${process.env.PORT || 3000}`
-  );
-});
-
-const wss = new WebSocket.Server({ server });
-
-wss.on('connection', (ws) => {
-  clients.push(ws);
-
-  ws.send(
-    JSON.stringify({
-      type: 'connected',
-      message: '✅ Connected to Gold WebSocket Server (Render)',
-      time: new Date().toISOString(),
-    })
-  );
-
-  // Always send lastRate (from file or stream) — format before sending
-  if (lastRate) {
-    try {
-      ws.send(
-        JSON.stringify(
-          formatRateForBroadcast({ type: 'rate', ...lastRate })
-        )
-      );
-    } catch (e) {
-      console.error('[CONNECTION][SEND LASTRATE ERROR]', e && e.message);
-    }
-  }
-
-  if (sessionHigh !== null && sessionLow !== null) {
-    ws.send(
-      JSON.stringify({
-        type: 'sessionStats',
-        high: sessionHigh,
-        low: sessionLow,
-        time: new Date().toISOString(),
-      })
-    );
-  }
-
-  ws.on('close', () => {
-    clients = clients.filter((c) => c !== ws);
-    console.log(
-      `[CLIENT] WebSocket client disconnected. Total: ${clients.length}`
-    );
-  });
-
-  ws.on('error', (err) => {
-    clients = clients.filter((c) => c !== ws);
-    console.error(`[CLIENT] WebSocket client error: ${err.message}`);
-  });
-});
-
-// =========================
-// Format + broadcast helpers
-// =========================
+// ====== format & broadcast ======
 function formatRateForBroadcast(obj) {
   const pick = (v) => {
     if (v === undefined || v === null) return null;
     const n = Number(v);
     if (isNaN(n)) return String(v);
-    return n.toFixed(2); // "2350.00"
+    return n.toFixed(2); // সবসময় ২ decimal string
   };
 
   return {
@@ -146,85 +92,100 @@ function broadcastToClients(data) {
   clients.forEach((ws) => {
     try {
       ws.send(json);
-    } catch (err) {
-      // per-client error ignore
-    }
+    } catch (_) {}
   });
 }
 
-// প্রতি ১ সেকেন্ডে ক্যাশ করা lastRate সবাইকে পাঠাই
+// প্রতি ১ সেকেন্ডে lastRate সবাইকে পাঠাই (client connect থাকলে smooth update)
 setInterval(() => {
   if (lastRate) {
     broadcastToClients({ type: 'rate', ...lastRate });
   }
 }, 1000);
 
-function updateSessionHighLow(bid, ask) {
-  if (sessionHigh === null || ask > sessionHigh) sessionHigh = ask;
-  if (sessionLow === null || bid < sessionLow) sessionLow = bid;
-}
+// ====== WebSocket handlers ======
+wss.on('connection', (ws) => {
+  clients.push(ws);
+  console.log('[WS] New client connected. Total:', clients.length);
 
-// =========================
-// MT5 VPS WebSocket client
-// =========================
-function connectMt5WebSocket() {
-  console.log('[MT5-WS] Connecting to MT5 VPS stream:', MT5_WS_URL);
-  const ws = new WebSocket(MT5_WS_URL);
+  // নতুন ক্লায়েন্টকে welcome + instant lastRate পাঠাই
+  ws.send(
+    JSON.stringify({
+      type: 'connected',
+      message: '✅ Connected to Gold WebSocket (Render MT5 bridge)',
+      time: new Date().toISOString(),
+    })
+  );
 
-  ws.on('open', () => {
-    console.log('[MT5-WS] 🟢 Connected to MT5 VPS WebSocket');
-  });
-
-  ws.on('message', (message) => {
+  if (lastRate) {
     try {
-      const data = JSON.parse(message);
-
-      // Expecting: { type: 'tick', symbol, bid, ask, ... }
-      if (data && data.type === 'tick') {
-        const bid = Number(data.bid);
-        const ask = Number(data.ask);
-        if (isNaN(bid) || isNaN(ask)) {
-          return;
-        }
-
-        updateSessionHighLow(bid, ask);
-
-        const newRate = {
-          bid,
-          ask,
-          high: sessionHigh,
-          low: sessionLow,
-          unit: 'ounce',
-          updated: new Date().toISOString(),
-        };
-
-        saveLastRate(newRate);
-        broadcastToClients({ type: 'rate', ...newRate });
-      }
+      ws.send(
+        JSON.stringify(formatRateForBroadcast({ type: 'rate', ...lastRate }))
+      );
     } catch (e) {
-      console.error('[MT5-WS][MESSAGE][PARSE ERROR]', e);
+      console.error('[CONNECTION][SEND LASTRATE ERROR]', e && e.message);
     }
+  }
+
+  if (sessionHigh !== null && sessionLow !== null) {
+    ws.send(
+      JSON.stringify({
+        type: 'sessionStats',
+        high: sessionHigh,
+        low: sessionLow,
+        time: new Date().toISOString(),
+      })
+    );
+  }
+
+  ws.on('close', () => {
+    clients = clients.filter((c) => c !== ws);
+    console.log(
+      '[WS] Client disconnected. Total:',
+      clients.length
+    );
   });
 
   ws.on('error', (err) => {
-    console.error('[MT5-WS][ERROR]', err.message || err);
+    clients = clients.filter((c) => c !== ws);
+    console.error('[WS] Client error:', err.message);
   });
 
-  ws.on('close', (code, reason) => {
-    console.warn(
-      `[MT5-WS][CLOSE] Streaming closed. Code: ${code}, Reason: ${reason}`
-    );
-    setTimeout(connectMt5WebSocket, 3000); // auto reconnect
-  });
-}
+  ws.on('message', (raw) => {
+    try {
+      const data = JSON.parse(raw.toString());
 
-// Node.js error handling
+      // 👉 VPS / Python bridge থেকে আসবে: { type: 'tick', symbol, bid, ask, time, ... }
+      if (data && data.type === 'tick') {
+        const bid = Number(data.bid);
+        const ask = Number(data.ask);
+
+        if (!isNaN(bid) && !isNaN(ask)) {
+          updateSessionHighLow(bid, ask);
+
+          const newRate = {
+            bid,
+            ask,
+            high: sessionHigh,
+            low: sessionLow,
+            unit: 'ounce',
+            updated: new Date().toISOString(),
+          };
+
+          saveLastRate(newRate);
+          broadcastToClients({ type: 'rate', ...newRate });
+        }
+      }
+    } catch (e) {
+      console.error('[WS] Error parsing message:', e);
+    }
+  });
+});
+
+// Node.js global error handlers
 process.on('uncaughtException', (err) =>
   console.error('[NODE][UNCAUGHT EXCEPTION]', err)
 );
 process.on('unhandledRejection', (reason) =>
   console.error('[NODE][UNHANDLED REJECTION]', reason)
 );
-
-// Bootstrap: শুধু MT5 VPS WebSocket এ connect করব
-connectMt5WebSocket();
