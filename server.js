@@ -61,8 +61,8 @@ wss.on("connection", (ws) => {
       const data = JSON.parse(raw.toString());
       if (data.type === "tick") {
         const bid = fmt2(data.bid);
-        const askRaw = fmt2(data.ask);
-        const ask = askRaw != null ? Number((askRaw + 0.4).toFixed(2)) : null;
+        const ask = bid != null ? Number((bid + 1).toFixed(2)) : null;
+
 
         const out = {
           type: "rate",
