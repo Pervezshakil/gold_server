@@ -69,6 +69,8 @@ wss.on("connection", (ws) => {
           symbol: data.symbol,
           bid,
           ask,
+          high: (data.high !=null ? fmt2(data.high) : null),
+          low: (data.low !=null ? fmt2(data.low) : null),
           time: data.time,
           time_msc: data.time_msc,
           volume: data.volume,
@@ -78,7 +80,7 @@ wss.on("connection", (ws) => {
         saveLastRate(out);
         broadcastToClients(out);
 
-        console.log(`[RATE] ${out.symbol} | bid=${bid} ask=${ask}`);
+        console.log(`[RATE] ${out.symbol} | bid=${bid} ask=${ask} high=${out.high} low=${out.low}`);
       }
     } catch (e) {
       console.log("[WS] Parse error:", e.message);
